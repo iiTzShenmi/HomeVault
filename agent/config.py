@@ -1,0 +1,94 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_FILE = PROJECT_ROOT / ".env"
+
+load_dotenv(ENV_FILE)
+
+
+def _get_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_int(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def project_root():
+    return PROJECT_ROOT
+
+
+def data_root():
+    custom = os.getenv("AGENT_DATA_DIR", "").strip()
+    root = Path(custom) if custom else PROJECT_ROOT / "data"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def e3_data_root():
+    root = data_root() / "e3"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def legacy_e3_runtime_root():
+    return PROJECT_ROOT / "agent" / "features" / "e3" / "runtime"
+
+
+def e3_runtime_root():
+    custom = os.getenv("E3_RUNTIME_ROOT", "").strip()
+    root = Path(custom) if custom else e3_data_root() / "runtime"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def legacy_agent_db_path():
+    return PROJECT_ROOT / "agent" / "features" / "e3" / "e3_agent.db"
+
+
+def agent_db_path():
+    custom = os.getenv("AGENT_DB_PATH", "").strip()
+    path = Path(custom) if custom else e3_data_root() / "e3_agent.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def e3_root():
+    return Path(os.getenv("E3_ROOT", "/home/eason/e3")).expanduser()
+
+
+def line_channel_secret():
+    return os.getenv("LINE_CHANNEL_SECRET", "").strip()
+
+
+def line_channel_access_token():
+    return os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+
+
+def auto_reload_enabled():
+    return _get_bool("AUTO_RELOAD", False)
+
+
+def port():
+    return _get_int("PORT", 5000)
+
+
+def e3_sync_interval_minutes():
+    return max(15, _get_int("E3_SYNC_INTERVAL_MINUTES", 30))
+
+
+def e3_reminder_poll_seconds():
+    return _get_int("E3_REMINDER_POLL_SECONDS", 60)
