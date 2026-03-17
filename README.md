@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Multi-Task Agent
 
 A bot project designed for multiple task domains and multiple chat platforms.
