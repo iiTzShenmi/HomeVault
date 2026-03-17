@@ -225,60 +225,100 @@ def upsert_event(user_id, event_uid, event_type, course_id, course_name, title, 
         )
 
 
+def mark_missing_events_inactive(user_id, active_event_uids):
+    with get_conn() as conn:
+        if active_event_uids:
+            placeholders = ",".join("?" for _ in active_event_uids)
+            conn.execute(
+                f"""
+                UPDATE events_cache
+                SET status='inactive'
+                WHERE user_id=? AND source='e3' AND event_uid NOT IN ({placeholders})
+                """,
+                (user_id, *active_event_uids),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE events_cache
+            SET status='inactive'
+            WHERE user_id=? AND source='e3'
+            """,
+            (user_id,),
+        )
+
+
 def get_upcoming_events(user_id, limit=10):
+    now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT event_type, course_id, course_name, title, due_at
+            SELECT event_uid, event_type, course_id, course_name, title, due_at
             FROM events_cache
-            WHERE user_id=? AND status='active' AND due_at IS NOT NULL
+            WHERE user_id=? AND status='active' AND due_at IS NOT NULL AND due_at >= ?
             ORDER BY due_at ASC
             LIMIT ?
             """,
-            (user_id, limit),
+            (user_id, now, limit),
         ).fetchall()
 
 
 def get_timeline_events(user_id, limit=30):
+    now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT event_type, course_id, course_name, title, due_at
+            SELECT event_uid, event_type, course_id, course_name, title, due_at
             FROM events_cache
-            WHERE user_id=? AND status='active' AND due_at IS NOT NULL
+            WHERE user_id=? AND status='active' AND due_at IS NOT NULL AND due_at >= ?
             ORDER BY due_at ASC
             LIMIT ?
             """,
-            (user_id, limit),
+            (user_id, now, limit),
         ).fetchall()
 
 
 def get_timeline_event_detail(user_id, offset=0):
+    now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT event_type, course_id, course_name, title, due_at, payload_json
+            SELECT event_uid, event_type, course_id, course_name, title, due_at, payload_json
             FROM events_cache
-            WHERE user_id=? AND status='active' AND due_at IS NOT NULL
+            WHERE user_id=? AND status='active' AND due_at IS NOT NULL AND due_at >= ?
             ORDER BY due_at ASC
             LIMIT 1 OFFSET ?
             """,
-            (user_id, offset),
+            (user_id, now, offset),
         ).fetchone()
 
 
 def get_timeline_event_details(user_id, limit=50):
+    now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT event_type, course_id, course_name, title, due_at, payload_json
+            SELECT event_uid, event_type, course_id, course_name, title, due_at, payload_json
             FROM events_cache
-            WHERE user_id=? AND status='active' AND due_at IS NOT NULL
+            WHERE user_id=? AND status='active' AND due_at IS NOT NULL AND due_at >= ?
             ORDER BY due_at ASC
             LIMIT ?
             """,
-            (user_id, limit),
+            (user_id, now, limit),
         ).fetchall()
+
+
+def get_event_by_uid(user_id, event_uid):
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT event_uid, event_type, course_id, course_name, title, due_at, payload_json
+            FROM events_cache
+            WHERE user_id=? AND event_uid=? AND status='active'
+            LIMIT 1
+            """,
+            (user_id, event_uid),
+        ).fetchone()
 
 
 def ensure_reminder_prefs(user_id):

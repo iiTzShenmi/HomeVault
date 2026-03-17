@@ -78,6 +78,17 @@ def line_channel_access_token():
     return os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 
 
+def public_base_url():
+    return os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+
+def file_proxy_secret():
+    custom = os.getenv("FILE_PROXY_SECRET", "").strip()
+    if custom:
+        return custom
+    return line_channel_secret()
+
+
 def auto_reload_enabled():
     return _get_bool("AUTO_RELOAD", False)
 
@@ -92,3 +103,11 @@ def e3_sync_interval_minutes():
 
 def e3_reminder_poll_seconds():
     return _get_int("E3_REMINDER_POLL_SECONDS", 60)
+
+
+def e3_file_proxy_ttl_seconds():
+    return max(60, _get_int("E3_FILE_PROXY_TTL_SECONDS", 300))
+
+
+def e3_file_proxy_max_bytes():
+    return max(1024 * 1024, _get_int("E3_FILE_PROXY_MAX_BYTES", 25 * 1024 * 1024))

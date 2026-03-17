@@ -10,6 +10,7 @@ from .db import (
     get_events_due_between,
     list_reminder_targets,
     log_notification,
+    mark_missing_events_inactive,
     notification_sent,
     update_login_state,
     upsert_event,
@@ -173,7 +174,9 @@ def _sync_user_snapshot(row, logger):
         courses = result["courses"]
         calendar_events = result.get("calendar_events") or []
         events = extract_events_from_fetch_all(courses, calendar_events=calendar_events)
+        active_event_uids = []
         for event in events:
+            active_event_uids.append(event["event_uid"])
             upsert_event(
                 user_id=row["user_id"],
                 event_uid=event["event_uid"],
@@ -184,6 +187,7 @@ def _sync_user_snapshot(row, logger):
                 due_at=event["due_at"],
                 payload_json=event["payload_json"],
             )
+        mark_missing_events_inactive(row["user_id"], active_event_uids)
         grade_changes = _sync_grade_items(row["user_id"], courses, get_grade_items, upsert_grade_item)
         update_login_state(row["user_id"], "ok", None)
         return grade_changes, True

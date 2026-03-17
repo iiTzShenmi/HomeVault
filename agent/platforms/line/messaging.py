@@ -14,7 +14,6 @@ def e3_quick_reply_items():
     commands = [
         ("課程", "e3 course"),
         ("成績", "e3 grades"),
-        ("檔案", "e3 files 生物"),
         ("近期作業", "e3 近期 作業"),
         ("近期行事曆", "e3 近期 行事曆"),
         ("全部時間軸", "e3 timeline"),

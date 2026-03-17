@@ -95,6 +95,12 @@ def extract_events_from_fetch_all(data, calendar_events=None):
                 for item in items:
                     if not isinstance(item, dict):
                         continue
+                    category = str(item.get("category") or "").strip().lower()
+                    submitted_files = item.get("submitted_files") or []
+                    if category and category not in {"in_progress", "upcoming"}:
+                        continue
+                    if submitted_files:
+                        continue
                     title = str(item.get("title") or item.get("name") or "未命名作業").strip()
                     due_raw = (
                         item.get("due")

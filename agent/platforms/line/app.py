@@ -1,12 +1,14 @@
 import logging
 import time
 
-from flask import Flask, request
+import requests
+from flask import Flask, Response, request
 
 from agent.config import auto_reload_enabled, port
 from agent.features.e3.reminders import start_reminder_worker
 from agent.features.weather import handle_city_weather, handle_location_weather
 from agent.features.e3 import handle_e3_command
+from agent.features.e3.file_proxy import FileProxyError, FileProxySessionExpired, prepare_proxy_download
 from agent.platforms.line.background import (
     build_processing_ack,
     is_background_e3_command,
@@ -24,6 +26,86 @@ from agent.platforms.line.messaging import (
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _render_proxy_error_page(title, message, suggestion=""):
+    extra = f"<p>{suggestion}</p>" if suggestion else ""
+    return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+      color: #0f172a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }}
+    .card {{
+      max-width: 560px;
+      width: 100%;
+      background: #ffffff;
+      border-radius: 18px;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+      padding: 28px;
+    }}
+    h1 {{
+      margin: 0 0 12px;
+      font-size: 24px;
+    }}
+    p {{
+      line-height: 1.6;
+      margin: 0 0 10px;
+      color: #334155;
+    }}
+    .hint {{
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 600;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>{title}</h1>
+    <p>{message}</p>
+    {extra}
+  </div>
+</body>
+</html>"""
+
+
+def _normalize_shortcut_text(text):
+    normalized = (text or "").strip()
+    lowered = normalized.lower()
+    shortcut_map = {
+        "課程": "e3 course",
+        "course": "e3 course",
+        "近期": "e3 近期",
+        "upcoming": "e3 近期",
+        "作業": "e3 近期 作業",
+        "homework": "e3 近期 作業",
+        "行事曆": "e3 timeline 行事曆",
+        "calendar": "e3 timeline 行事曆",
+        "timeline": "e3 timeline",
+        "狀態": "e3 狀態",
+        "status": "e3 狀態",
+        "重登": "e3 relogin",
+        "relogin": "e3 relogin",
+        "幫助": "e3 幫助",
+        "help": "e3 幫助",
+    }
+    return shortcut_map.get(normalized) or shortcut_map.get(lowered) or normalized
 
 
 def _handle_weather_text(text, reply_token, line_user_id):
@@ -141,7 +223,7 @@ def callback():
 
         message_type = message.get("type")
         if message_type == "text":
-            text = (message.get("text") or "").strip()
+            text = _normalize_shortcut_text((message.get("text") or "").strip())
             logger.info("line_text_received user=%s text=%s", line_user_id, text)
 
             if text.startswith("天氣"):
@@ -167,6 +249,48 @@ def callback():
                 logger.warning("skip_reply reason=missing_reply_token message_type=location")
 
     return "OK"
+
+
+@app.route("/e3/file/<token>", methods=["GET"])
+def e3_file_proxy():
+    try:
+        download = prepare_proxy_download(token)
+    except FileProxySessionExpired as exc:
+        return (
+            _render_proxy_error_page(exc.title, exc.message, "請回到 LINE 並輸入 `e3 relogin`，再重新點一次檔案。"),
+            exc.status_code,
+            {"Content-Type": "text/html; charset=utf-8"},
+        )
+    except FileProxyError as exc:
+        return (
+            _render_proxy_error_page(exc.title, exc.message),
+            exc.status_code,
+            {"Content-Type": "text/html; charset=utf-8"},
+        )
+    except requests.RequestException:
+        logger.exception("e3_file_proxy_request_failed")
+        return (
+            _render_proxy_error_page("E3 下載失敗", "伺服器目前無法從 E3 取得檔案，請稍後再試。"),
+            502,
+            {"Content-Type": "text/html; charset=utf-8"},
+        )
+
+    upstream = download["response"]
+
+    def generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=65536):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    response = Response(generate(), content_type=download["content_type"])
+    response.headers["Content-Disposition"] = f'attachment; filename="{download["filename"]}"'
+    content_length = upstream.headers.get("Content-Length")
+    if content_length:
+        response.headers["Content-Length"] = content_length
+    return response
 
 
 def _should_start_background_worker():
