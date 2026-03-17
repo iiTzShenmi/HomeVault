@@ -1,35 +1,41 @@
-<<<<<<< HEAD
-# Multi-Task Agent
+# HomeVault
 
-A bot project designed for multiple task domains and multiple chat platforms.
+A LINE bot focused on E3 course access, timelines, reminders, and lightweight utility features.
 
 ## Features
 
-- Multi-platform ready architecture
-- LINE adapter implemented now
-- Feature-first organization (`weather`, `e3`, ...)
-- Weather feature for Taiwan city/district forecasts
-- E3 feature command entry (`e3 幫助`, `e3 狀態`, `e3 課程`)
+- LINE bot webhook adapter
+- E3 login, relogin, logout, status, course, timeline, file browser
+- Reminder worker for upcoming events
+- Secure Level 1 file proxy for E3 downloads
+- Cloudflare quick tunnel support for temporary public access
 
 ## Project Layout
 
 ```text
-app.py                              # stable entrypoint used by service
+app.py
 agent/
+  config.py
   platforms/
     line/
-      app.py                        # LINE webhook adapter
+      app.py
+      background.py
+      messaging.py
   features/
-    weather/
-      __init__.py
-      handler.py                    # weather command handling
-      weather_api.py                # Open-Meteo client
-      geolocation.py                # geolocation + nearest-city logic
-      city_data.py                  # Taiwan city/district coordinates
     e3/
-      __init__.py
-      handler.py                    # e3 command handling
-      client.py                     # E3 API client wrapper
+      client.py
+      db.py
+      events.py
+      file_proxy.py
+      handler.py
+    weather/
+scripts/
+  line_rich_menu.py
+  cloudflared_tunnel.py
+  tunnel_watchdog.py
+deploy/
+  systemd/
+data/
 ```
 
 ## Setup
@@ -47,12 +53,18 @@ agent/
    pip install -r requirements.txt
    ```
 
-3. Configure `.env`:
+3. Configure [`.env`](/home/eason/server/.env):
 
    ```env
+   PORT=5000
+   AUTO_RELOAD=1
    LINE_CHANNEL_SECRET=...
    LINE_CHANNEL_ACCESS_TOKEN=...
-   E3_API_BASE_URL=http://127.0.0.1:5001
+   LINE_NOTIFY_USER_ID=...
+   PUBLIC_BASE_URL=auto
+   FILE_PROXY_SECRET=...
+   E3_FILE_PROXY_TTL_SECONDS=300
+   E3_FILE_PROXY_MAX_BYTES=26214400
    ```
 
 4. Run:
@@ -61,11 +73,11 @@ agent/
    python3 app.py
    ```
 
-## Commands
+## Common Commands
 
 ```text
-天氣 台北
 天氣
+天氣 台北
 e3 幫助
 e3 login <帳號> <密碼>
 e3 relogin
@@ -73,23 +85,62 @@ e3 logout
 e3 狀態
 e3 課程
 e3 近期
+e3 行事曆
+e3 檔案 <課名>
+e3 remind show
+e3 remind on
+e3 remind off
 ```
 
 ## LINE Rich Menu
 
-Create and bind the persistent HomeVault rich menu with:
+Create and bind the persistent rich menu with:
 
 ```bash
 /home/eason/server/venv/bin/python /home/eason/server/scripts/line_rich_menu.py
 ```
 
-This script reads `LINE_CHANNEL_ACCESS_TOKEN` from `.env`, generates a simple PNG menu image, creates the rich menu, and binds it to all users.
+## Temporary Public Tunnel
 
-## E3 Implementation
+This project can run a Cloudflare quick tunnel as a user service for testing.
 
-- Detailed plan: `docs/e3_manager_spec.md`
+Install and start:
 
-## Note
+```bash
+systemctl --user enable --now cloudflared-tunnel.service
+systemctl --user enable --now cloudflared-watchdog.service
+```
 
-If you also want to rename the repository folder itself, rename
-`/home/eason/server` to a neutral name (for example `/home/eason/multi-task-agent`) and update your systemd `WorkingDirectory` and `ExecStart` paths.
+Useful checks:
+
+```bash
+systemctl --user status cloudflared-tunnel.service
+systemctl --user status cloudflared-watchdog.service
+journalctl --user -u cloudflared-tunnel.service -f
+journalctl --user -u cloudflared-watchdog.service -f
+cat /home/eason/server/data/cloudflared/current_url
+```
+
+Important:
+
+- `PUBLIC_BASE_URL=auto` lets the app read the current tunnel URL from `data/cloudflared/current_url`
+- the watchdog sends LINE alerts when the tunnel goes down or recovers
+- quick tunnel URLs can change after restart
+
+If you want these user services to stay up even when you are not actively logged in, enable linger once:
+
+```bash
+sudo loginctl enable-linger eason
+```
+
+You can verify it with:
+
+```bash
+loginctl show-user eason | grep Linger
+```
+
+## Notes
+
+- The file proxy only works when users can reach your public URL.
+- For small-scale testing, the Cloudflare quick tunnel is enough.
+- For a stable long-term setup, move to a fixed public domain or named tunnel.

@@ -251,6 +251,11 @@ def callback():
     return "OK"
 
 
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return "ok", 200
+
+
 @app.route("/e3/file/<token>", methods=["GET"])
 def e3_file_proxy():
     try:

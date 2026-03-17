@@ -79,7 +79,18 @@ def line_channel_access_token():
 
 
 def public_base_url():
-    return os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    state_file = cloudflared_url_file()
+    if state_file.exists():
+        try:
+            url = state_file.read_text(encoding="utf-8").strip().rstrip("/")
+        except OSError:
+            url = ""
+        if url:
+            return url
+    value = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if value and value.lower() != "auto":
+        return value
+    return ""
 
 
 def file_proxy_secret():
@@ -111,3 +122,21 @@ def e3_file_proxy_ttl_seconds():
 
 def e3_file_proxy_max_bytes():
     return max(1024 * 1024, _get_int("E3_FILE_PROXY_MAX_BYTES", 25 * 1024 * 1024))
+
+
+def tunnel_data_root():
+    root = data_root() / "cloudflared"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def cloudflared_url_file():
+    return tunnel_data_root() / "current_url"
+
+
+def cloudflared_log_file():
+    return tunnel_data_root() / "cloudflared.log"
+
+
+def tunnel_watchdog_state_file():
+    return tunnel_data_root() / "watchdog_state.json"

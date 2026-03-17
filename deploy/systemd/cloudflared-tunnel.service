@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflared Quick Tunnel for HomeVault
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eason/server
+Environment=PYTHONPATH=/home/eason/server
+ExecStart=/home/eason/server/venv/bin/python /home/eason/server/scripts/cloudflared_tunnel.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

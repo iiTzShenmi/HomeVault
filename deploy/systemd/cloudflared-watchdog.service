@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflared Tunnel Watchdog for HomeVault
+After=network-online.target cloudflared-tunnel.service
+Wants=network-online.target cloudflared-tunnel.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eason/server
+Environment=PYTHONPATH=/home/eason/server
+EnvironmentFile=/home/eason/server/.env
+ExecStart=/home/eason/server/venv/bin/python /home/eason/server/scripts/tunnel_watchdog.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
