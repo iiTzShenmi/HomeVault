@@ -359,12 +359,125 @@ def _list_grades(logger, line_user_id):
     grade_items = extract_grade_items(data)
     if not grade_items:
         return "目前沒有可用成績資料。"
+    grouped = _group_grade_items_by_course(grade_items)
+    lines = ["📊 E3 成績："]
+    bubbles = []
+    for idx, course_group in enumerate(grouped[:10], start=1):
+        lines.append(f"{idx}. {course_group['course_label']}")
+        for item in course_group["items"][:3]:
+            lines.append(f"   {item['item_name']}：{item['score']}")
+        remaining = len(course_group["items"]) - 3
+        if remaining > 0:
+            lines.append(f"   ...另有 {remaining} 筆")
+        bubbles.append(_build_grade_bubble(course_group))
 
-    lines = ["📊 E3 成績（前 12 筆）："]
-    for idx, item in enumerate(grade_items[:12], start=1):
-        lines.append(f"{idx}. {_shorten_course_name(item['course_name'], max_len=22)}")
-        lines.append(f"   {item['item_name']}：{item['score']}")
-    return "\n".join(lines)
+    messages = []
+    if bubbles:
+        messages.append(
+            {
+                "type": "flex",
+                "altText": "\n".join(lines),
+                "contents": {
+                    "type": "carousel",
+                    "contents": bubbles,
+                },
+            }
+        )
+    return _line_response("\n".join(lines), messages=messages or None)
+
+
+def _group_grade_items_by_course(items):
+    grouped = {}
+    for item in items:
+        course_id = str(item.get("course_id") or "").strip()
+        course_name = _course_name_for_display(item.get("course_name"))
+        key = (course_id, course_name)
+        grouped.setdefault(
+            key,
+            {
+                "course_id": course_id,
+                "course_name": course_name,
+                "course_label": f"{course_id} {course_name}".strip(),
+                "items": [],
+            },
+        )
+        grouped[key]["items"].append(
+            {
+                "item_name": _shorten_title(item.get("item_name"), max_len=28),
+                "score": str(item.get("score") or "").strip(),
+            }
+        )
+    ordered = list(grouped.values())
+    ordered.sort(key=lambda row: (row["course_id"], row["course_name"]))
+    return ordered
+
+
+def _build_grade_bubble(course_group):
+    preview_items = course_group["items"][:4]
+    body_contents = [
+        {"type": "text", "text": course_group["course_id"] or "未提供課號", "size": "sm", "color": "#475569"},
+        {"type": "text", "text": f"共 {len(course_group['items'])} 筆成績", "size": "sm", "color": "#334155"},
+    ]
+    for item in preview_items:
+        body_contents.append(
+            {
+                "type": "box",
+                "layout": "baseline",
+                "spacing": "sm",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": item["item_name"],
+                        "size": "sm",
+                        "color": "#0F172A",
+                        "flex": 4,
+                        "wrap": True,
+                    },
+                    {
+                        "type": "text",
+                        "text": item["score"],
+                        "size": "sm",
+                        "color": "#1D4ED8",
+                        "weight": "bold",
+                        "flex": 2,
+                        "align": "end",
+                        "wrap": True,
+                    },
+                ],
+            }
+        )
+    remaining = len(course_group["items"]) - len(preview_items)
+    if remaining > 0:
+        body_contents.append(
+            {
+                "type": "text",
+                "text": f"...另有 {remaining} 筆成績",
+                "size": "xs",
+                "color": "#64748B",
+                "wrap": True,
+            }
+        )
+
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#7C3AED",
+            "paddingAll": "12px",
+            "contents": [
+                {"type": "text", "text": "成績", "color": "#EDE9FE", "size": "xs"},
+                {"type": "text", "text": course_group["course_name"], "color": "#FFFFFF", "weight": "bold", "wrap": True},
+            ],
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": body_contents,
+        },
+    }
 
 
 def _matches_course_keyword(course_label, keyword):
