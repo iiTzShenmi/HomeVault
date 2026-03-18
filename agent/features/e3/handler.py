@@ -1,7 +1,8 @@
-import base64
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from logging import Logger
+from typing import Any, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .client import check_status, fetch_courses, fetch_file_links, fetch_timeline_snapshot, login_and_sync, make_user_key
@@ -27,6 +28,7 @@ from .db import (
 )
 from .events import extract_events_from_fetch_all
 from .file_proxy import build_proxy_url
+from .secrets import decrypt_secret, encrypt_secret
 
 
 ASYNC_ACTIONS = {"login", "relogin", "重新登入"}
@@ -42,15 +44,7 @@ EVENT_TYPE_ALIASES = {
 }
 
 
-def _encode_secret(text):
-    return base64.b64encode(text.encode("utf-8")).decode("ascii")
-
-
-def _decode_secret(token):
-    return base64.b64decode(token.encode("ascii")).decode("utf-8")
-
-
-def _format_e3_error(exc):
+def _format_e3_error(exc: Exception) -> str:
     message = str(exc).strip()
     lowered = message.lower()
     if "exceeded 30 redirects" in lowered:
@@ -63,7 +57,7 @@ def _format_e3_error(exc):
     return "⚠️ E3 登入失敗，請確認帳密、ChromeDriver 或 Selenium 環境。"
 
 
-def _parse_e3_action(text):
+def _parse_e3_action(text: str) -> tuple[str, str, list[str]]:
     command = text.strip()
     parts = command.split(maxsplit=1)
     raw_action = parts[1].strip() if len(parts) > 1 else ""
@@ -72,7 +66,7 @@ def _parse_e3_action(text):
     return raw_action, verb, tokens
 
 
-def handle_e3_command(text, logger, line_user_id=None):
+def handle_e3_command(text: str, logger: Logger, line_user_id: Optional[str] = None) -> Any:
     init_db()
 
     action, verb, tokens = _parse_e3_action(text)
@@ -149,7 +143,7 @@ def handle_e3_command(text, logger, line_user_id=None):
     return "❓ 不支援的 E3 指令，請輸入：e3 幫助"
 
 
-def run_e3_async_command(text, logger, line_user_id=None):
+def run_e3_async_command(text: str, logger: Logger, line_user_id: Optional[str] = None) -> str:
     init_db()
 
     action, verb, tokens = _parse_e3_action(text)
@@ -1915,7 +1909,7 @@ def _login(action, logger, line_user_id):
         preview = result["home_preview"]
         events = _sync_events_for_user(user_id, courses, calendar_events=calendar_events)
         grade_changes = sync_grade_items(user_id, courses)
-        upsert_e3_account(user_id, account, _encode_secret(password), status="ok", error=None)
+        upsert_e3_account(user_id, account, encrypt_secret(password), status="ok", error=None)
         reply = (
             "✅ E3 登入成功。\n"
             f"已同步課程：{len(courses)} 門，時間軸事件：{len(events)} 筆。\n"
@@ -1927,7 +1921,7 @@ def _login(action, logger, line_user_id):
         return reply
     except Exception as exc:
         logger.error("e3_login_failed error=%s", exc)
-        upsert_e3_account(user_id, account, _encode_secret(password), status="error", error=str(exc))
+        upsert_e3_account(user_id, account, encrypt_secret(password), status="error", error=str(exc))
         return _format_e3_error(exc)
 
 
@@ -1946,7 +1940,7 @@ def _relogin(logger, line_user_id):
         return "找不到已儲存密碼，請重新執行 `e3 login <帳號> <密碼>`。"
 
     try:
-        password = _decode_secret(encrypted_password)
+        password = decrypt_secret(encrypted_password)
         result = login_and_sync(account, password, make_user_key(line_user_id), update_data=True, update_links=True)
         courses = result["courses"]
         calendar_events = result.get("calendar_events") or []

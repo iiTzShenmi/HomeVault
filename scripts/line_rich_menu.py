@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from pathlib import Path
 import json
 import os
 import struct
@@ -50,7 +51,8 @@ FONT_5X7 = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Create and bind LINE rich menu for HomeVault.")
-    parser.add_argument("--env", default="/home/eason/server/.env", help="Path to .env file")
+    project_root = Path(__file__).resolve().parents[1]
+    parser.add_argument("--env", default=str(project_root / ".env"), help="Path to .env file")
     parser.add_argument("--image", default="", help="Optional PNG image path to upload")
     parser.add_argument("--output-image", default="/tmp/homevault-richmenu.png", help="Generated PNG output path")
     parser.add_argument("--alias", default="homevault-e3", help="Rich menu alias ID")

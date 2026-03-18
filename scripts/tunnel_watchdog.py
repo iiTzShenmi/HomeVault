@@ -1,4 +1,4 @@
-#!/home/eason/server/venv/bin/python
+#!/usr/bin/env python3
 import json
 import time
 

@@ -1,4 +1,6 @@
 import os
+import base64
+import hashlib
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -67,7 +69,8 @@ def agent_db_path():
 
 
 def e3_root():
-    return Path(os.getenv("E3_ROOT", "/home/eason/e3")).expanduser()
+    default_root = PROJECT_ROOT.parent / "e3"
+    return Path(os.getenv("E3_ROOT", str(default_root))).expanduser()
 
 
 def line_channel_secret():
@@ -80,6 +83,18 @@ def line_channel_access_token():
 
 def line_notify_user_id():
     return os.getenv("LINE_NOTIFY_USER_ID", "").strip()
+
+
+def e3_encryption_key() -> bytes:
+    secret = (
+        os.getenv("E3_ENCRYPTION_KEY", "").strip()
+        or os.getenv("FILE_PROXY_SECRET", "").strip()
+        or line_channel_secret()
+    )
+    if not secret:
+        raise RuntimeError("Missing E3_ENCRYPTION_KEY/FILE_PROXY_SECRET for E3 secret encryption.")
+    digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest)
 
 
 def public_base_url():
@@ -144,3 +159,7 @@ def cloudflared_log_file():
 
 def tunnel_watchdog_state_file():
     return tunnel_data_root() / "watchdog_state.json"
+
+
+def reminder_worker_lock_file():
+    return e3_data_root() / "reminder_worker.lock"

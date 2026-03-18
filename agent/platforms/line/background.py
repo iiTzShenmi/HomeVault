@@ -1,5 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
+from typing import Any, Callable
 
 from agent.features.e3 import handle_e3_command, run_e3_async_command
 
@@ -7,9 +9,10 @@ from agent.features.e3 import handle_e3_command, run_e3_async_command
 BACKGROUND_COMMAND_DEDUPE_SECONDS = 8
 _BACKGROUND_COMMANDS = {}
 _BACKGROUND_LOCK = threading.Lock()
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="line-bg")
 
 
-def build_processing_ack(text):
+def build_processing_ack(text: str) -> str:
     lowered = text.strip().lower()
     label = "E3 指令"
     if "timeline" in lowered or "近期" in text or "行事曆" in text:
@@ -25,12 +28,12 @@ def build_processing_ack(text):
     return f"⏳ 已收到{label}指令，正在處理中，完成後會再推播結果給你。"
 
 
-def is_async_e3_command(text):
+def is_async_e3_command(text: str) -> bool:
     normalized = text.strip().lower()
     return normalized.startswith("e3 login") or normalized in {"e3 relogin", "e3 重新登入"}
 
 
-def is_deferred_read_e3_command(text):
+def is_deferred_read_e3_command(text: str) -> bool:
     normalized = text.strip().lower()
     prefixes = (
         "e3 course",
@@ -48,11 +51,11 @@ def is_deferred_read_e3_command(text):
     return normalized.startswith(prefixes)
 
 
-def is_background_e3_command(text):
+def is_background_e3_command(text: str) -> bool:
     return is_async_e3_command(text) or is_deferred_read_e3_command(text)
 
 
-def _background_command_key(line_user_id, text):
+def _background_command_key(line_user_id: str | None, text: str) -> str:
     normalized = " ".join(str(text or "").strip().lower().split())
     return f"{line_user_id or '-'}::{normalized}"
 
@@ -69,7 +72,7 @@ def _cleanup_background_commands(now=None):
             _BACKGROUND_COMMANDS.pop(key, None)
 
 
-def register_background_command(line_user_id, text):
+def register_background_command(line_user_id: str | None, text: str):
     now = time.time()
     _cleanup_background_commands(now)
     key = _background_command_key(line_user_id, text)
@@ -82,26 +85,21 @@ def register_background_command(line_user_id, text):
         return True, item
 
 
-def finish_background_command(line_user_id, text):
+def finish_background_command(line_user_id: str | None, text: str) -> None:
     key = _background_command_key(line_user_id, text)
     with _BACKGROUND_LOCK:
         _BACKGROUND_COMMANDS.pop(key, None)
 
 
-def start_e3_background_task(text, line_user_id, logger, push_fn):
+def start_e3_background_task(text: str, line_user_id: str | None, logger, push_fn: Callable[[str, Any], bool]) -> None:
     if not line_user_id:
         logger.warning("skip_async_e3 reason=missing_line_user_id")
         return
 
-    worker = threading.Thread(
-        target=_run_e3_background_task,
-        args=(text, line_user_id, logger, push_fn),
-        daemon=True,
-    )
-    worker.start()
+    _EXECUTOR.submit(_run_e3_background_task, text, line_user_id, logger, push_fn)
 
 
-def _run_e3_background_task(text, line_user_id, logger, push_fn):
+def _run_e3_background_task(text: str, line_user_id: str, logger, push_fn: Callable[[str, Any], bool]) -> None:
     try:
         logger.info("e3_background_started user=%s text=%s", line_user_id, text)
         if is_async_e3_command(text):

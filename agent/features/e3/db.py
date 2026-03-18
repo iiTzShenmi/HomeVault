@@ -1,16 +1,21 @@
-import sqlite3
 import json
+import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from typing import Iterator, Optional
 
 from agent.config import agent_db_path, legacy_agent_db_path
+
+
+_DB_LOCAL = threading.local()
 
 
 def _utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _db_path():
+def _db_path() -> str:
     path = agent_db_path()
     legacy_path = legacy_agent_db_path()
     if not path.exists() and legacy_path.exists():
@@ -18,23 +23,41 @@ def _db_path():
     return str(path)
 
 
-@contextmanager
-def get_conn():
+def _create_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
+
+
+def _thread_connection() -> sqlite3.Connection:
+    conn: Optional[sqlite3.Connection] = getattr(_DB_LOCAL, "conn", None)
+    if conn is None:
+        conn = _create_connection()
+        _DB_LOCAL.conn = conn
+    return conn
+
+
+@contextmanager
+def get_conn() -> Iterator[sqlite3.Connection]:
+    conn = _thread_connection()
     try:
         yield conn
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
-def _has_column(conn, table_name, column_name):
+def _has_column(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return any(row["name"] == column_name for row in rows)
 
 
-def init_db():
+def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
             """
@@ -131,7 +154,7 @@ def init_db():
         )
 
 
-def upsert_user(line_user_id):
+def upsert_user(line_user_id: str) -> int:
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -146,13 +169,19 @@ def upsert_user(line_user_id):
         return row["id"]
 
 
-def get_user_id(line_user_id):
+def get_user_id(line_user_id: str) -> int | None:
     with get_conn() as conn:
         row = conn.execute("SELECT id FROM users WHERE line_user_id=?", (line_user_id,)).fetchone()
         return row["id"] if row else None
 
 
-def upsert_e3_account(user_id, e3_account, encrypted_password, status="ok", error=None):
+def upsert_e3_account(
+    user_id: int,
+    e3_account: str,
+    encrypted_password: str,
+    status: str = "ok",
+    error: str | None = None,
+) -> None:
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -172,7 +201,7 @@ def upsert_e3_account(user_id, e3_account, encrypted_password, status="ok", erro
         )
 
 
-def update_login_state(user_id, status, error=None):
+def update_login_state(user_id: int, status: str, error: str | None = None) -> None:
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -185,7 +214,7 @@ def update_login_state(user_id, status, error=None):
         )
 
 
-def get_e3_account_by_user_id(user_id):
+def get_e3_account_by_user_id(user_id: int):
     with get_conn() as conn:
         return conn.execute(
             "SELECT e3_account, encrypted_password, login_status, last_error, last_login_at FROM e3_accounts WHERE user_id=?",
@@ -193,7 +222,7 @@ def get_e3_account_by_user_id(user_id):
         ).fetchone()
 
 
-def delete_user_data(user_id):
+def delete_user_data(user_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM events_cache WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM grade_items_cache WHERE user_id=?", (user_id,))
@@ -202,7 +231,16 @@ def delete_user_data(user_id):
         conn.execute("DELETE FROM e3_accounts WHERE user_id=?", (user_id,))
 
 
-def upsert_event(user_id, event_uid, event_type, course_id, course_name, title, due_at, payload_json):
+def upsert_event(
+    user_id: int,
+    event_uid: str,
+    event_type: str,
+    course_id: str | None,
+    course_name: str | None,
+    title: str,
+    due_at: str | None,
+    payload_json: str,
+) -> None:
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -225,7 +263,7 @@ def upsert_event(user_id, event_uid, event_type, course_id, course_name, title, 
         )
 
 
-def mark_missing_events_inactive(user_id, active_event_uids):
+def mark_missing_events_inactive(user_id: int, active_event_uids: list[str]) -> None:
     with get_conn() as conn:
         if active_event_uids:
             placeholders = ",".join("?" for _ in active_event_uids)
@@ -248,7 +286,7 @@ def mark_missing_events_inactive(user_id, active_event_uids):
         )
 
 
-def get_upcoming_events(user_id, limit=10):
+def get_upcoming_events(user_id: int, limit: int = 10):
     now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
@@ -263,7 +301,7 @@ def get_upcoming_events(user_id, limit=10):
         ).fetchall()
 
 
-def get_timeline_events(user_id, limit=30):
+def get_timeline_events(user_id: int, limit: int = 30):
     now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
@@ -278,7 +316,7 @@ def get_timeline_events(user_id, limit=30):
         ).fetchall()
 
 
-def get_timeline_event_detail(user_id, offset=0):
+def get_timeline_event_detail(user_id: int, offset: int = 0):
     now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
@@ -293,7 +331,7 @@ def get_timeline_event_detail(user_id, offset=0):
         ).fetchone()
 
 
-def get_timeline_event_details(user_id, limit=50):
+def get_timeline_event_details(user_id: int, limit: int = 50):
     now = _utc_now_iso()
     with get_conn() as conn:
         return conn.execute(
@@ -308,7 +346,7 @@ def get_timeline_event_details(user_id, limit=50):
         ).fetchall()
 
 
-def get_event_by_uid(user_id, event_uid):
+def get_event_by_uid(user_id: int, event_uid: str):
     with get_conn() as conn:
         return conn.execute(
             """
@@ -321,7 +359,7 @@ def get_event_by_uid(user_id, event_uid):
         ).fetchone()
 
 
-def ensure_reminder_prefs(user_id):
+def ensure_reminder_prefs(user_id: int):
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -338,12 +376,12 @@ def ensure_reminder_prefs(user_id):
         ).fetchone()
 
 
-def get_reminder_prefs(user_id):
+def get_reminder_prefs(user_id: int):
     prefs = ensure_reminder_prefs(user_id)
     return prefs
 
 
-def get_reminder_prefs_by_line_user_id(line_user_id):
+def get_reminder_prefs_by_line_user_id(line_user_id: str):
     with get_conn() as conn:
         return conn.execute(
             """
@@ -362,7 +400,7 @@ def get_reminder_prefs_by_line_user_id(line_user_id):
         ).fetchone()
 
 
-def update_reminder_enabled(user_id, enabled):
+def update_reminder_enabled(user_id: int, enabled: bool) -> None:
     now = _utc_now_iso()
     ensure_reminder_prefs(user_id)
     with get_conn() as conn:
@@ -376,7 +414,7 @@ def update_reminder_enabled(user_id, enabled):
         )
 
 
-def update_reminder_schedule(user_id, schedule_list):
+def update_reminder_schedule(user_id: int, schedule_list: list[str]) -> None:
     now = _utc_now_iso()
     ensure_reminder_prefs(user_id)
     with get_conn() as conn:
@@ -390,7 +428,7 @@ def update_reminder_schedule(user_id, schedule_list):
         )
 
 
-def get_grade_items(user_id):
+def get_grade_items(user_id: int):
     with get_conn() as conn:
         return conn.execute(
             """
@@ -403,7 +441,7 @@ def get_grade_items(user_id):
         ).fetchall()
 
 
-def upsert_grade_item(user_id, course_id, course_name, item_name, score):
+def upsert_grade_item(user_id: int, course_id: str, course_name: str, item_name: str, score: str) -> None:
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -420,7 +458,7 @@ def upsert_grade_item(user_id, course_id, course_name, item_name, score):
         )
 
 
-def get_events_due_between(user_id, start_iso, end_iso, limit=10):
+def get_events_due_between(user_id: int, start_iso: str, end_iso: str, limit: int = 10):
     with get_conn() as conn:
         return conn.execute(
             """
@@ -454,7 +492,7 @@ def list_reminder_targets():
         ).fetchall()
 
 
-def notification_sent(user_id, notification_type, details=None):
+def notification_sent(user_id: int, notification_type: str, details: str | None = None) -> bool:
     with get_conn() as conn:
         row = conn.execute(
             """
@@ -467,7 +505,13 @@ def notification_sent(user_id, notification_type, details=None):
         return bool(row)
 
 
-def log_notification(user_id, notification_type, result, details=None, event_uid=None):
+def log_notification(
+    user_id: int,
+    notification_type: str,
+    result: str,
+    details: str | None = None,
+    event_uid: str | None = None,
+) -> None:
     now = _utc_now_iso()
     with get_conn() as conn:
         conn.execute(

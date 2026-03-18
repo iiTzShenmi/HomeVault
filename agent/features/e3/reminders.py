@@ -2,8 +2,10 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+import fcntl
+from typing import Any, Callable, Optional
 
-from agent.config import e3_reminder_poll_seconds, e3_sync_interval_minutes
+from agent.config import e3_reminder_poll_seconds, e3_sync_interval_minutes, reminder_worker_lock_file
 from .client import login_and_sync, make_user_key
 from .db import (
     get_e3_account_by_user_id,
@@ -16,6 +18,7 @@ from .db import (
     upsert_event,
 )
 from .events import extract_events_from_fetch_all
+from .secrets import decrypt_secret
 
 
 DEFAULT_LOOKAHEAD_HOURS = 36
@@ -23,6 +26,7 @@ DEFAULT_SCHEDULE = ["09:00", "21:00"]
 COUNTDOWN_HOURS = [12, 2]
 _STARTED = False
 _LOCK = threading.Lock()
+_WORKER_LOCK_HANDLE: Optional[Any] = None
 
 
 def _taipei_now():
@@ -58,12 +62,6 @@ def _course_name_for_display(text):
         text = text[:end]
     text = text.strip(" -_|,")
     return text or "-"
-
-
-def _decode_secret(token):
-    import base64
-
-    return base64.b64decode(token.encode("ascii")).decode("utf-8")
 
 
 def _format_digest(rows, slot_text):
@@ -163,7 +161,7 @@ def _sync_user_snapshot(row, logger):
     from .db import get_grade_items, upsert_grade_item  # local import to avoid clutter
 
     try:
-        password = _decode_secret(account_row["encrypted_password"])
+        password = decrypt_secret(account_row["encrypted_password"])
         result = login_and_sync(
             account_row["e3_account"],
             password,
@@ -284,7 +282,7 @@ def process_due_reminders(push_fn, logger):
             logger.error("e3_reminder_push_failed user=%s slot=%s", row["line_user_id"], current_slot)
 
 
-def _worker_loop(push_fn, logger, interval_seconds):
+def _worker_loop(push_fn: Callable[[str, Any], bool], logger, interval_seconds: int) -> None:
     while True:
         try:
             process_due_reminders(push_fn, logger)
@@ -293,10 +291,26 @@ def _worker_loop(push_fn, logger, interval_seconds):
         time.sleep(interval_seconds)
 
 
-def start_reminder_worker(push_fn, logger):
+def _acquire_worker_lock() -> bool:
+    global _WORKER_LOCK_HANDLE
+    lock_path = reminder_worker_lock_file()
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return False
+    _WORKER_LOCK_HANDLE = handle
+    return True
+
+
+def start_reminder_worker(push_fn: Callable[[str, Any], bool], logger) -> bool:
     global _STARTED
     with _LOCK:
         if _STARTED:
+            return False
+        if not _acquire_worker_lock():
+            logger.info("e3_reminder_worker_skipped reason=lock_held")
             return False
         _STARTED = True
 

@@ -5,14 +5,20 @@ import os
 import re
 import shutil
 import sys
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
 
 from agent.config import e3_root as get_config_e3_root, e3_runtime_root, legacy_e3_runtime_root
 
-def get_runtime_root():
+
+_E3_SYNC_LOCK = threading.Lock()
+
+
+def get_runtime_root() -> Path:
     root = e3_runtime_root()
     legacy_root = legacy_e3_runtime_root()
     if not root.exists() and legacy_root.exists():
@@ -25,13 +31,13 @@ def get_runtime_root():
     return root
 
 
-def make_user_key(line_user_id):
+def make_user_key(line_user_id: str) -> str:
     if not line_user_id:
         raise ValueError("line_user_id is required for direct E3 integration")
     return re.sub(r"[^A-Za-z0-9_.-]", "_", line_user_id)
 
 
-def _runtime_paths_for_user(user_key):
+def _runtime_paths_for_user(user_key: str) -> dict[str, str]:
     workspace = get_runtime_root() / user_key
     workspace.mkdir(parents=True, exist_ok=True)
     return {
@@ -44,7 +50,7 @@ def _runtime_paths_for_user(user_key):
 
 
 @contextmanager
-def _patched_e3_runtime(user_key):
+def _patched_e3_runtime(user_key: str) -> Iterator[dict[str, str]]:
     e3_project_root = get_config_e3_root().resolve()
     if not e3_project_root.exists():
         raise FileNotFoundError(f"E3 root not found: {e3_project_root}")
@@ -115,7 +121,7 @@ def _patched_e3_runtime(user_key):
             parse_html_pages.OUTPUT_DIR = original_parsed_dir
 
 
-def _load_json(path):
+def _load_json(path: os.PathLike[str] | str) -> Any:
     file_path = Path(path)
     if not file_path.exists():
         return None
@@ -123,7 +129,7 @@ def _load_json(path):
         return json.load(handle)
 
 
-def _read_courses_index(courses_file_path):
+def _read_courses_index(courses_file_path: str) -> dict[str, dict[str, str]]:
     raw = _load_json(courses_file_path)
     if not isinstance(raw, dict):
         return {}
@@ -142,7 +148,7 @@ def _read_courses_index(courses_file_path):
     return result
 
 
-def _read_all_courses_data(base_dir, courses_file_path=None):
+def _read_all_courses_data(base_dir: str, courses_file_path: str | None = None) -> dict[str, dict[str, Any]]:
     base_path = Path(base_dir)
     all_data = {}
     if courses_file_path:
@@ -191,7 +197,7 @@ def _read_all_courses_data(base_dir, courses_file_path=None):
     return all_data
 
 
-def _read_home_page_preview(html_path):
+def _read_home_page_preview(html_path: str) -> dict[str, Any]:
     file_path = Path(html_path)
     if not file_path.exists():
         return {
@@ -239,7 +245,7 @@ def _read_home_page_preview(html_path):
     }
 
 
-def _parse_calendar_timestamp(url):
+def _parse_calendar_timestamp(url: str | None) -> str | None:
     if not url:
         return None
 
@@ -256,7 +262,7 @@ def _parse_calendar_timestamp(url):
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
-def _read_home_calendar_events(html_path, course_lookup=None):
+def _read_home_calendar_events(html_path: str, course_lookup: dict[str, str] | None = None) -> list[dict[str, str]]:
     file_path = Path(html_path)
     if not file_path.exists():
         return []
@@ -302,7 +308,7 @@ def _read_home_calendar_events(html_path, course_lookup=None):
     return events
 
 
-def _build_course_lookup(courses):
+def _build_course_lookup(courses: dict[str, dict[str, Any]]) -> dict[str, str]:
     lookup = {}
     if not isinstance(courses, dict):
         return lookup
@@ -316,7 +322,7 @@ def _build_course_lookup(courses):
     return lookup
 
 
-def check_status(user_key=None):
+def check_status(user_key: str | None = None) -> dict[str, Any]:
     e3_root = get_config_e3_root().resolve()
     runtime_root = get_runtime_root()
     status = {
@@ -337,12 +343,12 @@ def check_status(user_key=None):
     return status
 
 
-def fetch_courses(user_key):
+def fetch_courses(user_key: str) -> dict[str, dict[str, Any]]:
     paths = _runtime_paths_for_user(user_key)
     return _read_all_courses_data(paths["BASE_DIR"], paths["COURSES_FILE"])
 
 
-def fetch_timeline_snapshot(user_key):
+def fetch_timeline_snapshot(user_key: str) -> dict[str, Any]:
     paths = _runtime_paths_for_user(user_key)
     courses = _read_all_courses_data(paths["BASE_DIR"], paths["COURSES_FILE"])
     course_lookup = _build_course_lookup(courses)
@@ -354,13 +360,13 @@ def fetch_timeline_snapshot(user_key):
     }
 
 
-def clear_runtime_data(user_key):
+def clear_runtime_data(user_key: str) -> None:
     workspace = get_runtime_root() / user_key
     if workspace.exists():
         shutil.rmtree(workspace)
 
 
-def fetch_file_links(user_key):
+def fetch_file_links(user_key: str) -> dict[str, Any]:
     paths = _runtime_paths_for_user(user_key)
     file_links = _load_json(Path(paths["BASE_DIR"]) / "file_links_db.json")
     if not isinstance(file_links, dict):
@@ -373,15 +379,22 @@ def fetch_file_links(user_key):
     }
 
 
-def login_and_sync(account, password, user_key, update_data=False, update_links=False):
-    with _patched_e3_runtime(user_key) as paths:
-        get_user_data = importlib.import_module("get_course.get_user_data").get_user_data
-        get_user_data(account, password, update_data=update_data, update_links=update_links)
-        courses = _read_all_courses_data(paths["BASE_DIR"], paths["COURSES_FILE"])
-        course_lookup = _build_course_lookup(courses)
-        return {
-            "courses": courses,
-            "calendar_events": _read_home_calendar_events(paths["E3_MY_HTML"], course_lookup),
-            "home_preview": _read_home_page_preview(paths["E3_MY_HTML"]),
-            "workspace": paths["BASE_DIR"],
-        }
+def login_and_sync(
+    account: str,
+    password: str,
+    user_key: str,
+    update_data: bool = False,
+    update_links: bool = False,
+) -> dict[str, Any]:
+    with _E3_SYNC_LOCK:
+        with _patched_e3_runtime(user_key) as paths:
+            get_user_data = importlib.import_module("get_course.get_user_data").get_user_data
+            get_user_data(account, password, update_data=update_data, update_links=update_links)
+            courses = _read_all_courses_data(paths["BASE_DIR"], paths["COURSES_FILE"])
+            course_lookup = _build_course_lookup(courses)
+            return {
+                "courses": courses,
+                "calendar_events": _read_home_calendar_events(paths["E3_MY_HTML"], course_lookup),
+                "home_preview": _read_home_page_preview(paths["E3_MY_HTML"]),
+                "workspace": paths["BASE_DIR"],
+            }
