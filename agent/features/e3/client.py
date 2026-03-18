@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
 
-from agent.config import e3_runtime_root, legacy_e3_runtime_root
+from agent.config import e3_cache_ttl_minutes, e3_runtime_root, legacy_e3_runtime_root
 from .scraper import config as scraper_config
 from .scraper import db_manager as scraper_db_manager
 from .scraper import utils as scraper_utils
@@ -336,6 +336,39 @@ def fetch_file_links(user_key: str) -> dict[str, Any]:
         "courses": courses,
         "file_links": file_links,
         "workspace": paths["BASE_DIR"],
+    }
+
+
+def get_cache_status(user_key: str) -> dict[str, Any]:
+    paths = _runtime_paths_for_user(user_key)
+    candidates = [
+        Path(paths["COURSES_FILE"]),
+        Path(paths["E3_MY_HTML"]),
+        Path(paths["BASE_DIR"]) / "file_links_db.json",
+        Path(paths["LAST_RUN_FILE"]),
+    ]
+    existing = [path for path in candidates if path.exists()]
+    ttl_minutes = e3_cache_ttl_minutes()
+    if not existing:
+        return {
+            "exists": False,
+            "ttl_minutes": ttl_minutes,
+            "is_fresh": False,
+            "age_seconds": None,
+            "age_minutes": None,
+            "last_updated_at": "",
+        }
+
+    latest = max(existing, key=lambda path: path.stat().st_mtime)
+    last_dt = datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc)
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds())
+    return {
+        "exists": True,
+        "ttl_minutes": ttl_minutes,
+        "is_fresh": age_seconds <= ttl_minutes * 60,
+        "age_seconds": age_seconds,
+        "age_minutes": int(age_seconds // 60),
+        "last_updated_at": last_dt.isoformat(),
     }
 
 

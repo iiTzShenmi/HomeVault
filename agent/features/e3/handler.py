@@ -5,7 +5,7 @@ from logging import Logger
 from typing import Any, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .client import check_status, fetch_courses, fetch_file_links, fetch_timeline_snapshot, login_and_sync, make_user_key
+from .client import check_status, fetch_courses, fetch_file_links, fetch_timeline_snapshot, get_cache_status, login_and_sync, make_user_key
 from .client import clear_runtime_data
 from .db import (
     delete_user_data,
@@ -76,7 +76,7 @@ def handle_e3_command(text: str, logger: Logger, line_user_id: Optional[str] = N
         return (
             "📘 E3 指令：\n"
             "1) e3 login <帳號> <密碼>\n"
-            "2) e3 relogin\n"
+            "2) e3 relogin / e3 refresh\n"
             "3) e3 logout\n"
             "4) e3 課程 / e3 course\n"
             "5) e3 近期 [作業/行事曆/考試]\n"
@@ -113,7 +113,7 @@ def handle_e3_command(text: str, logger: Logger, line_user_id: Optional[str] = N
     if verb == "login":
         return _queue_async(action, line_user_id)
 
-    if action in ASYNC_ACTIONS - {"login"} or verb == "relogin":
+    if action in ASYNC_ACTIONS - {"login"} or verb in {"relogin", "refresh", "update"} or action_head in {"更新", "刷新"}:
         return _queue_async(action, line_user_id)
 
     if action_head == "登出" or verb == "logout":
@@ -151,7 +151,7 @@ def run_e3_async_command(text: str, logger: Logger, line_user_id: Optional[str] 
     if verb == "login":
         return _login(action, logger, line_user_id)
 
-    if action in {"重新登入"} or verb == "relogin":
+    if action in {"重新登入", "更新", "刷新"} or verb in {"relogin", "refresh", "update"}:
         return _relogin(logger, line_user_id)
 
     return "沒有可執行的背景 E3 任務。"
@@ -171,7 +171,7 @@ def _queue_async(action, line_user_id):
     row = get_e3_account_by_user_id(user_id)
     if not row:
         return "找不到已綁定帳號，請先 `e3 login <帳號> <密碼>`。"
-    return "⏳ E3 重新登入已開始，完成後會再推播結果給你。"
+    return "⏳ E3 強制更新已開始，完成後會再推播最新同步結果給你。"
 
 
 def _check_e3_status(line_user_id):
@@ -234,6 +234,7 @@ def _list_courses(logger, line_user_id):
     try:
         data = fetch_courses(make_user_key(line_user_id))
         file_snapshot = fetch_file_links(make_user_key(line_user_id))
+        cache_status = get_cache_status(make_user_key(line_user_id))
     except Exception as exc:
         logger.error("e3_list_courses_failed error=%s", exc)
         return "E3 本地資料讀取失敗，請先 `e3 login <帳號> <密碼>` 或 `e3 relogin`。"
@@ -248,7 +249,7 @@ def _list_courses(logger, line_user_id):
         return f"目前找不到 {semester_tag} 學期課程，請先 `e3 relogin` 重新同步。"
 
     file_links = file_snapshot.get("file_links") or {}
-    text_lines = [f"📚 你的 {semester_tag} 學期 E3 課程："]
+    text_lines = [f"📚 你的 {semester_tag} 學期 E3 課程：", _format_cache_status_text(cache_status)]
     bubbles = []
     for idx, (display_name, payload) in enumerate(current_courses[:10], start=1):
         summary = _build_course_summary(idx, display_name, payload, file_links.get(str((payload or {}).get("_course_id") or "").strip()) or {})
@@ -256,7 +257,7 @@ def _list_courses(logger, line_user_id):
         text_lines.append(f"   作業 {summary['homework_count']}｜成績 {summary['grade_count']}｜檔案 {summary['file_count']}")
         bubbles.append(_build_course_bubble(summary))
 
-    messages = []
+    messages = [_build_cache_status_flex(cache_status, "課程快取")]
     if bubbles:
         messages.append(
             {
@@ -352,6 +353,7 @@ def _list_grades(logger, line_user_id):
 
     try:
         data = fetch_courses(make_user_key(line_user_id))
+        cache_status = get_cache_status(make_user_key(line_user_id))
     except Exception as exc:
         logger.error("e3_list_grades_failed error=%s", exc)
         return "E3 成績資料讀取失敗，請先 `e3 relogin`。"
@@ -360,7 +362,7 @@ def _list_grades(logger, line_user_id):
     if not grade_items:
         return "目前沒有可用成績資料。"
     grouped = _group_grade_items_by_course(grade_items)
-    lines = ["📊 E3 成績："]
+    lines = ["📊 E3 成績：", _format_cache_status_text(cache_status)]
     bubbles = []
     for idx, course_group in enumerate(grouped[:10], start=1):
         lines.append(f"{idx}. {course_group['course_label']}")
@@ -371,7 +373,7 @@ def _list_grades(logger, line_user_id):
             lines.append(f"   ...另有 {remaining} 筆")
         bubbles.append(_build_grade_bubble(course_group))
 
-    messages = []
+    messages = [_build_cache_status_flex(cache_status, "成績快取")]
     if bubbles:
         messages.append(
             {
@@ -560,6 +562,7 @@ def _list_files(tokens, logger, line_user_id):
 
     try:
         snapshot = fetch_file_links(make_user_key(line_user_id))
+        cache_status = get_cache_status(make_user_key(line_user_id))
     except Exception as exc:
         logger.error("e3_list_files_failed error=%s", exc)
         return "E3 檔案資料讀取失敗，請先 `e3 relogin`。"
@@ -581,7 +584,7 @@ def _list_files(tokens, logger, line_user_id):
     if not matches:
         return f"找不到包含「{keyword}」的課程檔案，請先 `e3 relogin` 更新資料。"
 
-    lines = [f"📎 與「{keyword}」相關的課程檔案："]
+    lines = [f"📎 與「{keyword}」相關的課程檔案：", _format_cache_status_text(cache_status)]
     bubbles = []
     for course_id, course_name, links in matches[:5]:
         all_files = _collect_file_entries(course_id, course_name, links)
@@ -600,7 +603,8 @@ def _list_files(tokens, logger, line_user_id):
     if not bubbles:
         return f"「{keyword}」目前沒有可用檔案連結。"
 
-    messages = [
+    messages = [_build_cache_status_flex(cache_status, "檔案快取")]
+    messages.append(
         {
             "type": "flex",
             "altText": "\n".join(lines),
@@ -609,7 +613,7 @@ def _list_files(tokens, logger, line_user_id):
                 "contents": bubbles,
             },
         }
-    ]
+    )
     return _line_response("\n".join(lines), messages=messages)
 
 
@@ -1005,6 +1009,79 @@ def _line_response(text, messages=None):
     if messages:
         payload["messages"] = messages
     return payload
+
+
+def _format_cache_status_text(cache_status):
+    if not cache_status or not cache_status.get("exists"):
+        return "🕒 Cache: unavailable. Use Force Update to sync from E3."
+
+    age_minutes = int(cache_status.get("age_minutes") or 0)
+    ttl_minutes = int(cache_status.get("ttl_minutes") or 15)
+    if cache_status.get("is_fresh"):
+        return f"🕒 Cache: {age_minutes} min old, serving local snapshot instantly."
+    return f"⚠️ Cache: {age_minutes} min old, older than {ttl_minutes} min. Tap Force Update for fresh E3 data."
+
+
+def _build_cache_status_flex(cache_status, title):
+    if not cache_status or not cache_status.get("exists"):
+        header_text = "No local cache yet"
+        body_text = "Use Force Update to fetch the latest data from E3."
+        accent = "#B45309"
+    elif cache_status.get("is_fresh"):
+        age_minutes = int(cache_status.get("age_minutes") or 0)
+        header_text = f"Fresh cache · {age_minutes} min old"
+        body_text = "This response is served from local data for faster performance."
+        accent = "#15803D"
+    else:
+        age_minutes = int(cache_status.get("age_minutes") or 0)
+        ttl_minutes = int(cache_status.get("ttl_minutes") or 15)
+        header_text = f"Stale cache · {age_minutes} min old"
+        body_text = f"Older than the {ttl_minutes}-minute freshness window. Force Update if you need real-time data."
+        accent = "#B45309"
+
+    return {
+        "type": "flex",
+        "altText": f"{title}: {header_text}",
+        "contents": {
+            "type": "bubble",
+            "size": "kilo",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": accent,
+                "paddingAll": "12px",
+                "contents": [
+                    {"type": "text", "text": title, "color": "#FFFFFF", "size": "xs"},
+                    {"type": "text", "text": header_text, "color": "#FFFFFF", "weight": "bold", "wrap": True},
+                ],
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {"type": "text", "text": body_text, "size": "sm", "wrap": True, "color": "#334155"},
+                ],
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "height": "sm",
+                        "color": accent,
+                        "action": {
+                            "type": "message",
+                            "label": "Force Update",
+                            "text": "e3 refresh",
+                        },
+                    }
+                ],
+            },
+        },
+    }
 
 
 def _store_last_event_index(line_user_id, ordered_groups):
@@ -2100,6 +2177,7 @@ def _upcoming(tokens, line_user_id):
     rows = get_upcoming_events(user_id, limit=10)
     if not rows:
         return "目前沒有近期事件，請先 `e3 login` 或 `e3 relogin` 進行同步。"
+    cache_status = get_cache_status(make_user_key(line_user_id))
     try:
         courses = fetch_courses(make_user_key(line_user_id))
     except Exception:
@@ -2110,6 +2188,8 @@ def _upcoming(tokens, line_user_id):
     text, messages, ordered_groups = _build_timeline_messages(rows, "⏰ 近期提醒（前 10 筆）：", event_type=event_type)
     if not text:
         return "目前沒有符合條件的近期事件。"
+    text = f"{text}\n\n{_format_cache_status_text(cache_status)}"
+    messages = [_build_cache_status_flex(cache_status, "近期事件快取")] + (messages or [])
     _store_last_event_index(line_user_id, ordered_groups)
     return _line_response(text, messages=messages or None)
 
@@ -2136,6 +2216,8 @@ def _timeline(tokens, line_user_id, logger):
             calendar_events=snapshot.get("calendar_events") or [],
         )
 
+    cache_status = get_cache_status(make_user_key(line_user_id))
+
     rows = get_timeline_events(user_id, limit=20)
     if not rows:
         return "目前沒有可用時間軸事件，請先 `e3 login` 或 `e3 relogin`。"
@@ -2147,5 +2229,7 @@ def _timeline(tokens, line_user_id, logger):
     text, messages, ordered_groups = _build_timeline_messages(rows, "🗓️ E3 時間軸（前 20 筆）：", event_type=event_type)
     if not text:
         return "目前沒有符合條件的時間軸事件。"
+    text = f"{text}\n\n{_format_cache_status_text(cache_status)}"
+    messages = [_build_cache_status_flex(cache_status, "時間軸快取")] + (messages or [])
     _store_last_event_index(line_user_id, ordered_groups)
     return _line_response(text, messages=messages or None)

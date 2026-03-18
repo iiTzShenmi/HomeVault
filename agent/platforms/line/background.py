@@ -24,14 +24,14 @@ def build_processing_ack(text: str) -> str:
         label = "事件詳情"
     elif lowered.startswith("e3 login"):
         label = "登入"
-    elif lowered in {"e3 relogin", "e3 重新登入"}:
-        label = "重新登入"
+    elif lowered in {"e3 relogin", "e3 重新登入", "e3 refresh", "e3 更新", "e3 刷新"}:
+        label = "更新同步"
     return f"⏳ 已收到{label}指令，正在處理中，完成後會再推播結果給你。"
 
 
 def is_async_e3_command(text: str) -> bool:
     normalized = text.strip().lower()
-    return normalized.startswith("e3 login") or normalized in {"e3 relogin", "e3 重新登入"}
+    return normalized.startswith("e3 login") or normalized in {"e3 relogin", "e3 重新登入", "e3 refresh", "e3 更新", "e3 刷新"}
 
 
 def is_deferred_read_e3_command(text: str) -> bool:

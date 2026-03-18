@@ -131,6 +131,10 @@ def e3_sync_interval_minutes():
     return max(15, _get_int("E3_SYNC_INTERVAL_MINUTES", 30))
 
 
+def e3_cache_ttl_minutes():
+    return max(1, _get_int("E3_CACHE_TTL_MINUTES", 15))
+
+
 def e3_reminder_poll_seconds():
     return _get_int("E3_REMINDER_POLL_SECONDS", 60)
 
