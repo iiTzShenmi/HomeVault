@@ -1,8 +1,0 @@
-.env
-venv/
-data/
-__pycache__/
-*.pyc
-
-agent/**/__pycache__/
-scripts/**/__pycache__/
